@@ -23,7 +23,6 @@ type Repository interface {
 	CreatePlan(context.Context, store.DBTX, domain.SupportPlan) error
 	PlanByID(context.Context, store.DBTX, string) (domain.SupportPlan, error)
 	UpdatePlan(context.Context, store.DBTX, domain.SupportPlan, int64) error
-	PersistPlanActivation(context.Context, domain.SupportPlan, int64) error
 	CountOpenPlansForResident(context.Context, store.DBTX, string, string) (int, error)
 }
 
@@ -88,49 +87,9 @@ func (s *Service) Submit(ctx context.Context, actor domain.Actor, id string, exp
 }
 
 func (s *Service) Activate(ctx context.Context, actor domain.Actor, id string, expectedVersion int64) (domain.SupportPlan, error) {
-	if !actor.Role.CanManageResidents() {
-		return domain.SupportPlan{}, apperr.New(apperr.CodeForbidden, "only coordinators can change support plans")
-	}
-	now := s.now.Now()
-	current, err := s.repo.PlanByID(ctx, nil, id)
-	if err != nil {
-		return domain.SupportPlan{}, mapPlanError("load support plan", err)
-	}
-	resident, err := s.repo.ResidentByID(ctx, nil, current.ResidentID, actor.DistrictID)
-	if err != nil {
-		return domain.SupportPlan{}, mapPlanError("load resident for support plan", err)
-	}
-	assessment, err := s.repo.AssessmentByID(ctx, nil, current.AssessmentID)
-	if err != nil {
-		return domain.SupportPlan{}, mapPlanError("load assessment for support plan", err)
-	}
-	if current.Version != expectedVersion {
-		return domain.SupportPlan{}, mapPlanError("activate support plan", fmt.Errorf("support plan version conflict"))
-	}
-	count, err := s.repo.CountOpenPlansForResident(ctx, nil, current.ResidentID, current.ID)
-	if err != nil {
-		return domain.SupportPlan{}, mapPlanError("count support plans", err)
-	}
-	if count > 0 {
-		return domain.SupportPlan{}, mapPlanError("activate support plan", fmt.Errorf("resident already has another open support plan"))
-	}
-	updated, err := current.Activate(assessment, resident, now)
-	if err != nil {
-		return domain.SupportPlan{}, mapPlanError("activate support plan", err)
-	}
-	if err := s.repo.PersistPlanActivation(ctx, updated, current.Version); err != nil {
-		return domain.SupportPlan{}, mapPlanError("persist support plan activation", err)
-	}
-	err = s.repo.WithinTx(ctx, func(tx *sql.Tx) error {
-		if err := s.audit.Record(ctx, tx, actor, "support_plan", id, "activate", "success", map[string]any{"status": updated.Status}, now); err != nil {
-			return err
-		}
-		return s.events.Enqueue(ctx, tx, actor.DistrictID, "support_plan.activated", "support_plan", id, map[string]any{"resident_id": current.ResidentID}, now)
+	return s.change(ctx, actor, id, expectedVersion, "activate", func(current domain.SupportPlan, resident domain.Resident, assessment domain.Assessment, now time.Time) (domain.SupportPlan, error) {
+		return current.Activate(assessment, resident, now)
 	})
-	if err != nil {
-		return domain.SupportPlan{}, mapPlanError("activate support plan", err)
-	}
-	return updated, nil
 }
 
 func (s *Service) change(ctx context.Context, actor domain.Actor, id string, expectedVersion int64, action string, mutate func(domain.SupportPlan, domain.Resident, domain.Assessment, time.Time) (domain.SupportPlan, error)) (domain.SupportPlan, error) {
