@@ -23,7 +23,6 @@ type Repository interface {
 	CreatePlan(context.Context, store.DBTX, domain.SupportPlan) error
 	PlanByID(context.Context, store.DBTX, string) (domain.SupportPlan, error)
 	UpdatePlan(context.Context, store.DBTX, domain.SupportPlan, int64) error
-	PersistPlanSubmission(context.Context, domain.SupportPlan, int64) error
 	CountOpenPlansForResident(context.Context, store.DBTX, string, string) (int, error)
 }
 
@@ -82,12 +81,32 @@ func (s *Service) AddGoal(ctx context.Context, actor domain.Actor, id, goal stri
 }
 
 func (s *Service) Submit(ctx context.Context, actor domain.Actor, id string, expectedVersion int64) (domain.SupportPlan, error) {
-	if !actor.Role.CanManageResidents() { return domain.SupportPlan{}, apperr.New(apperr.CodeForbidden, "only coordinators can submit support plans") }
-	now:=s.now.Now(); current,err:=s.repo.PlanByID(ctx,nil,id); if err!=nil{return domain.SupportPlan{},mapPlanError("submit support plan",err)}
-	if current.Version!=expectedVersion{return domain.SupportPlan{},apperr.Conflict("support plan version conflict")}; updated,err:=current.SubmitForReview(now); if err!=nil{return domain.SupportPlan{},mapPlanError("submit support plan",err)}
-	if err:=s.repo.PersistPlanSubmission(ctx,updated,current.Version);err!=nil{return domain.SupportPlan{},mapPlanError("submit support plan",err)}
-	if err:=s.repo.WithinTx(ctx,func(tx *sql.Tx)error{return s.audit.Record(ctx,tx,actor,"support_plan",id,"submit","success",map[string]any{"status":updated.Status},now)});err!=nil{return domain.SupportPlan{},mapPlanError("submit support plan",err)}
-	return updated,nil
+	if !actor.Role.CanManageResidents() {
+		return domain.SupportPlan{}, apperr.New(apperr.CodeForbidden, "only coordinators can submit support plans")
+	}
+	now := s.now.Now()
+	var updated domain.SupportPlan
+	err := s.repo.WithinTx(ctx, func(tx *sql.Tx) error {
+		current, err := s.repo.PlanByID(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if current.Version != expectedVersion {
+			return apperr.Conflict("support plan version conflict")
+		}
+		updated, err = current.SubmitForReview(now)
+		if err != nil {
+			return err
+		}
+		if err := s.repo.UpdatePlan(ctx, tx, updated, current.Version); err != nil {
+			return err
+		}
+		return s.audit.Record(ctx, tx, actor, "support_plan", id, "submit", "success", map[string]any{"status": updated.Status}, now)
+	})
+	if err != nil {
+		return domain.SupportPlan{}, mapPlanError("submit support plan", err)
+	}
+	return updated, nil
 }
 
 func (s *Service) Activate(ctx context.Context, actor domain.Actor, id string, expectedVersion int64) (domain.SupportPlan, error) {

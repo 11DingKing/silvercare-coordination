@@ -57,10 +57,6 @@ func (s *Store) UpdatePlan(ctx context.Context, q store.DBTX, plan domain.Suppor
 	return requireOne(result, "support plan version conflict")
 }
 
-func (s *Store) PersistPlanSubmission(ctx context.Context, plan domain.SupportPlan, expectedVersion int64) error {
-	return s.WithinTx(ctx, func(tx *sql.Tx) error { current,err:=s.PlanByID(ctx,tx,plan.ID); if err!=nil{return err}; if current.Version!=expectedVersion{return fmt.Errorf("support plan version conflict")}; return s.UpdatePlan(ctx,tx,plan,expectedVersion) })
-}
-
 func (s *Store) CountOpenPlansForResident(ctx context.Context, q store.DBTX, residentID, exceptID string) (int, error) {
 	if q == nil {
 		q = s.db
