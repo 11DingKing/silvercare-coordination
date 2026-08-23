@@ -21,7 +21,6 @@ type Repository interface {
 	CreateResource(context.Context, store.DBTX, domain.Resource) error
 	ResourceByID(context.Context, store.DBTX, string, string) (domain.Resource, error)
 	UpdateResource(context.Context, store.DBTX, domain.Resource, int64) error
-	PersistResourceAssignment(context.Context, domain.Resource, int64) error
 	ResidentByID(context.Context, store.DBTX, string, string) (domain.Resident, error)
 }
 
@@ -68,25 +67,25 @@ func (s *Service) Assign(ctx context.Context, actor domain.Actor, resourceID, re
 	}
 	now := s.now.Now()
 	var updated domain.Resource
-	current, err := s.repo.ResourceByID(ctx, nil, resourceID, actor.DistrictID)
-	if err != nil {
-		return domain.Resource{}, mapResourceError("load resource for assignment", err)
-	}
-	resident, err := s.repo.ResidentByID(ctx, nil, residentID, actor.DistrictID)
-	if err != nil {
-		return domain.Resource{}, mapResourceError("load resident for assignment", err)
-	}
-	if current.Version != expectedVersion {
-		return domain.Resource{}, mapResourceError("assign resource", fmt.Errorf("resource version conflict"))
-	}
-	updated, err = current.Assign(resident, dueAt, now)
-	if err != nil {
-		return domain.Resource{}, mapResourceError("assign resource", err)
-	}
-	if err := s.repo.PersistResourceAssignment(ctx, updated, current.Version); err != nil {
-		return domain.Resource{}, mapResourceError("persist resource assignment", err)
-	}
-	err = s.repo.WithinTx(ctx, func(tx *sql.Tx) error {
+	err := s.repo.WithinTx(ctx, func(tx *sql.Tx) error {
+		current, err := s.repo.ResourceByID(ctx, tx, resourceID, actor.DistrictID)
+		if err != nil {
+			return err
+		}
+		if current.Version != expectedVersion {
+			return fmt.Errorf("resource version conflict")
+		}
+		resident, err := s.repo.ResidentByID(ctx, tx, residentID, actor.DistrictID)
+		if err != nil {
+			return err
+		}
+		updated, err = current.Assign(resident, dueAt, now)
+		if err != nil {
+			return err
+		}
+		if err := s.repo.UpdateResource(ctx, tx, updated, current.Version); err != nil {
+			return err
+		}
 		if err := s.audit.Record(ctx, tx, actor, "resource", resourceID, "assign", "success", map[string]any{"resident_id": residentID, "due_at": dueAt}, now); err != nil {
 			return err
 		}

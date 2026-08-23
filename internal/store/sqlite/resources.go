@@ -52,19 +52,6 @@ func (s *Store) UpdateResource(ctx context.Context, q store.DBTX, resource domai
 	return requireOne(result, "resource version conflict")
 }
 
-func (s *Store) PersistResourceAssignment(ctx context.Context, resource domain.Resource, expectedVersion int64) error {
-	return s.WithinTx(ctx, func(tx *sql.Tx) error {
-		current, err := s.ResourceByID(ctx, tx, resource.ID, resource.DistrictID)
-		if err != nil {
-			return err
-		}
-		if current.Version != expectedVersion {
-			return fmt.Errorf("resource version conflict")
-		}
-		return s.UpdateResource(ctx, tx, resource, expectedVersion)
-	})
-}
-
 func scanResource(row *sql.Row) (domain.Resource, error) {
 	var resource domain.Resource
 	var status, createdAt, updatedAt string
