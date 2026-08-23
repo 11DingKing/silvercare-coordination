@@ -23,7 +23,6 @@ type Repository interface {
 	CreateResident(context.Context, store.DBTX, domain.Resident) error
 	ResidentByID(context.Context, store.DBTX, string, string) (domain.Resident, error)
 	UpdateResident(context.Context, store.DBTX, domain.Resident, int64) error
-	PersistResidentWithdrawal(context.Context, domain.Resident, int64) error
 	ListResidents(context.Context, storesqlite.ResidentFilter) ([]domain.Resident, int, error)
 }
 
@@ -121,7 +120,9 @@ func (s *Service) WithdrawConsent(ctx context.Context, actor domain.Actor, resid
 			return fmt.Errorf("resident version conflict")
 		}
 		updated = current.WithdrawConsent(now)
-		if err := s.repo.PersistResidentWithdrawal(ctx, updated, current.Version); err != nil { return err }
+		if err := s.repo.UpdateResident(ctx, tx, updated, current.Version); err != nil {
+			return err
+		}
 		if err := s.audit.Record(ctx, tx, actor, "resident", residentID, "withdraw_consent", "success", map[string]any{}, now); err != nil {
 			return err
 		}

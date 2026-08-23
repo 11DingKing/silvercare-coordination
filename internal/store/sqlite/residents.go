@@ -60,18 +60,6 @@ func (s *Store) UpdateResident(ctx context.Context, q store.DBTX, resident domai
 	}
 	return requireOne(result, "resident version conflict")
 }
-
-// PersistResidentWithdrawal writes the state outside the caller's audit transaction.
-// The separation is intentionally visible to the task's atomicity regression.
-func (s *Store) PersistResidentWithdrawal(ctx context.Context, resident domain.Resident, expectedVersion int64) error {
-	return s.WithinTx(ctx, func(tx *sql.Tx) error {
-		current, err := s.ResidentByID(ctx, tx, resident.ID, resident.DistrictID)
-		if err != nil { return err }
-		if current.Version != expectedVersion { return fmt.Errorf("resident version conflict") }
-		return s.UpdateResident(ctx, tx, resident, expectedVersion)
-	})
-}
-
 func (s *Store) ListResidents(ctx context.Context, filter ResidentFilter) ([]domain.Resident, int, error) {
 	if filter.Limit <= 0 || filter.Limit > 200 {
 		filter.Limit = 50

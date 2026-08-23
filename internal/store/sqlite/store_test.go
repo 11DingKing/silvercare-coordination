@@ -196,6 +196,57 @@ func TestResidentOptimisticVersionConflict(t *testing.T) {
 	}
 }
 
+// TestWithdrawConsentRollsBackResidentOnFailure guards the atomicity regression
+// where the consent write used a nested transaction that committed before audit
+// and outbox writes: when a later step failed the resident was left withdrawn,
+// and retrying with the original version hit a conflict. The resident update
+// must share the caller transaction so a downstream failure rolls it back.
+func TestWithdrawConsentRollsBackResidentOnFailure(t *testing.T) {
+	store := testStore(t)
+	now := time.Now().UTC()
+	seedDistrict(t, store, now)
+	resident := seedResident(t, store, now)
+
+	errSentinel := errors.New("downstream write failed")
+	err := store.WithinTx(context.Background(), func(tx *sql.Tx) error {
+		current, err := store.ResidentByID(context.Background(), tx, resident.ID, resident.DistrictID)
+		if err != nil {
+			return err
+		}
+		withdrawn := current.WithdrawConsent(now.Add(time.Hour))
+		if err := store.UpdateResident(context.Background(), tx, withdrawn, current.Version); err != nil {
+			return err
+		}
+		// Simulate a later audit/outbox failure within the same transaction.
+		return errSentinel
+	})
+	if !errors.Is(err, errSentinel) {
+		t.Fatalf("err = %v", err)
+	}
+
+	loaded, err := store.ResidentByID(context.Background(), nil, resident.ID, resident.DistrictID)
+	if err != nil {
+		t.Fatalf("load resident: %v", err)
+	}
+	if loaded.ConsentStatus != domain.ConsentGranted {
+		t.Fatalf("consent = %s, want granted (withdrawal leaked)", loaded.ConsentStatus)
+	}
+	if loaded.Version != resident.Version {
+		t.Fatalf("version = %d, want %d (version advanced on rolled-back tx)", loaded.Version, resident.Version)
+	}
+
+	// Retrying with the original version must succeed: the failed attempt left no
+	// version bump behind that would otherwise force a conflict.
+	retry := loaded.WithdrawConsent(now.Add(2 * time.Hour))
+	if err := store.UpdateResident(context.Background(), nil, retry, loaded.Version); err != nil {
+		t.Fatalf("retry withdraw: %v", err)
+	}
+	reloaded, _ := store.ResidentByID(context.Background(), nil, resident.ID, resident.DistrictID)
+	if reloaded.ConsentStatus != domain.ConsentWithdrawn || reloaded.Version != loaded.Version+1 {
+		t.Fatalf("reloaded = %+v", reloaded)
+	}
+}
+
 func TestConcurrentBudgetReservationsPreserveLimit(t *testing.T) {
 	store := testStore(t)
 	now := time.Now().UTC()
