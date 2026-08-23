@@ -1,0 +1,7 @@
+/silvercare-server
+/data/
+/*.db
+/*.db-shm
+/*.db-wal
+/.env
+/coverage.out
