@@ -51,19 +51,6 @@ func (s *Store) UpdateAuthorization(ctx context.Context, q store.DBTX, a domain.
 	return requireOne(result, "authorization version conflict")
 }
 
-func (s *Store) PersistAuthorizationActivation(ctx context.Context, a domain.Authorization, expectedVersion int64) error {
-	return s.WithinTx(ctx, func(tx *sql.Tx) error {
-		current, err := s.AuthorizationByID(ctx, tx, a.ID, a.DistrictID)
-		if err != nil {
-			return err
-		}
-		if current.Version != expectedVersion {
-			return fmt.Errorf("authorization version conflict")
-		}
-		return s.UpdateAuthorization(ctx, tx, a, expectedVersion)
-	})
-}
-
 func scanAuthorization(row *sql.Row) (domain.Authorization, error) {
 	var a domain.Authorization
 	var status, startsAt, endsAt, createdAt, updatedAt string

@@ -23,7 +23,6 @@ type Repository interface {
 	CreateAuthorization(context.Context, store.DBTX, domain.Authorization) error
 	AuthorizationByID(context.Context, store.DBTX, string, string) (domain.Authorization, error)
 	UpdateAuthorization(context.Context, store.DBTX, domain.Authorization, int64) error
-	PersistAuthorizationActivation(context.Context, domain.Authorization, int64) error
 	DistrictBudget(context.Context, store.DBTX, string) (storesqlite.DistrictBudget, error)
 	ReserveBudget(context.Context, store.DBTX, string, int64, int64, time.Time) error
 	ReleaseBudget(context.Context, store.DBTX, string, int64, time.Time) error
@@ -108,10 +107,10 @@ func (s *Service) Activate(ctx context.Context, actor domain.Actor, id string, e
 	if err != nil {
 		return domain.Authorization{}, mapBenefitError("activate authorization", err)
 	}
-	if err := s.repo.PersistAuthorizationActivation(ctx, updated, current.Version); err != nil {
-		return domain.Authorization{}, mapBenefitError("persist authorization activation", err)
-	}
 	err = s.repo.WithinTx(ctx, func(tx *sql.Tx) error {
+		if err := s.repo.UpdateAuthorization(ctx, tx, updated, current.Version); err != nil {
+			return err
+		}
 		return s.audit.Record(ctx, tx, actor, "authorization", id, "activate", "success", map[string]any{}, now)
 	})
 	if err != nil {
