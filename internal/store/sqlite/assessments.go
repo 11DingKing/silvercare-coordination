@@ -67,19 +67,6 @@ func (s *Store) UpdateAssessment(ctx context.Context, q store.DBTX, assessment d
 	return requireOne(result, "assessment version conflict")
 }
 
-func (s *Store) PersistAssessmentApproval(ctx context.Context, assessment domain.Assessment, expectedVersion int64) error {
-	return s.WithinTx(ctx, func(tx *sql.Tx) error {
-		current, err := s.AssessmentByID(ctx, tx, assessment.ID)
-		if err != nil {
-			return err
-		}
-		if current.Version != expectedVersion {
-			return fmt.Errorf("assessment version conflict")
-		}
-		return s.UpdateAssessment(ctx, tx, assessment, expectedVersion)
-	})
-}
-
 func (s *Store) SupersedeOtherAssessments(ctx context.Context, q store.DBTX, residentID, keepID string, updatedAt string) (int64, error) {
 	if q == nil {
 		q = s.db

@@ -22,7 +22,6 @@ type Repository interface {
 	CreateAssessment(context.Context, store.DBTX, domain.Assessment) error
 	AssessmentByID(context.Context, store.DBTX, string) (domain.Assessment, error)
 	UpdateAssessment(context.Context, store.DBTX, domain.Assessment, int64) error
-	PersistAssessmentApproval(context.Context, domain.Assessment, int64) error
 	SupersedeOtherAssessments(context.Context, store.DBTX, string, string, string) (int64, error)
 }
 
@@ -109,10 +108,10 @@ func (s *Service) Approve(ctx context.Context, actor domain.Actor, id string, ex
 	if err != nil {
 		return domain.Assessment{}, mapError("approve assessment", err)
 	}
-	if err := s.repo.PersistAssessmentApproval(ctx, updated, current.Version); err != nil {
-		return domain.Assessment{}, mapError("persist assessment approval", err)
-	}
-	err = s.repo.WithinTx(ctx, func(tx *sql.Tx) error {
+	if err := s.repo.WithinTx(ctx, func(tx *sql.Tx) error {
+		if err := s.repo.UpdateAssessment(ctx, tx, updated, current.Version); err != nil {
+			return err
+		}
 		if _, err := s.repo.SupersedeOtherAssessments(ctx, tx, current.ResidentID, current.ID, now.Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
@@ -120,8 +119,7 @@ func (s *Service) Approve(ctx context.Context, actor domain.Actor, id string, ex
 			return err
 		}
 		return s.events.Enqueue(ctx, tx, actor.DistrictID, "assessment.approved", "assessment", id, map[string]any{"resident_id": current.ResidentID}, now)
-	})
-	if err != nil {
+	}); err != nil {
 		return domain.Assessment{}, mapError("approve assessment", err)
 	}
 	return updated, nil
