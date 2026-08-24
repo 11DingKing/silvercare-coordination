@@ -87,6 +87,56 @@ func TestWorkerJobRetryThenSuccess(t *testing.T) {
 	}
 }
 
+func TestDeleteExpiredIdempotencyBatchIsAtomic(t *testing.T) {
+	store := testStore(t)
+	now := time.Now().UTC()
+	seedDistrict(t, store, now)
+	// Two expired records for the same actor/operation. Ordering by expires_at then
+	// idempotency_key makes key_1 delete first and key_2 second.
+	for _, k := range []string{"key_1", "key_2"} {
+		record := IdempotencyRecord{DistrictID: "district_1", ActorID: "user_1", Operation: "create_visit", Key: k, RequestHash: "hash_" + k, ExpiresAt: now.Add(-time.Hour), CreatedAt: now, UpdatedAt: now}
+		if _, _, err := store.BeginIdempotency(context.Background(), nil, record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Force the second delete to fail. With per-key transactions the first would have
+	// committed and leaked a partial delete; a single transaction must roll back both.
+	if _, err := store.db.Exec(`CREATE TRIGGER fail_second_delete BEFORE DELETE ON idempotency_records WHEN OLD.idempotency_key='key_2' BEGIN SELECT RAISE(ABORT, 'forced'); END`); err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := store.DeleteExpiredIdempotencyBatch(context.Background(), now)
+	if err == nil {
+		t.Fatalf("expected batch to fail, deleted=%d", deleted)
+	}
+	var remaining int
+	if err := store.db.QueryRow("SELECT COUNT(*) FROM idempotency_records").Scan(&remaining); err != nil {
+		t.Fatal(err)
+	}
+	if remaining != 2 {
+		t.Fatalf("partial delete leaked: %d records remain, want 2", remaining)
+	}
+}
+
+func TestDeleteExpiredIdempotencyBatchRemovesAllExpired(t *testing.T) {
+	store := testStore(t)
+	now := time.Now().UTC()
+	seedDistrict(t, store, now)
+	record := IdempotencyRecord{DistrictID: "district_1", ActorID: "user_1", Operation: "create_visit", Key: "key_1", RequestHash: "hash_a", ExpiresAt: now.Add(-time.Hour), CreatedAt: now, UpdatedAt: now}
+	if _, _, err := store.BeginIdempotency(context.Background(), nil, record); err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := store.DeleteExpiredIdempotencyBatch(context.Background(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 1 {
+		t.Fatalf("deleted=%d want 1", deleted)
+	}
+	if _, err := store.Idempotency(context.Background(), nil, record.DistrictID, record.ActorID, record.Operation, record.Key); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("err=%v want ErrNoRows", err)
+	}
+}
+
 func TestIdempotencyScopesOperationAndRequestHash(t *testing.T) {
 	store := testStore(t)
 	now := time.Now().UTC()

@@ -106,16 +106,42 @@ func (s *Store) DeleteExpiredIdempotency(ctx context.Context, before time.Time) 
 }
 
 func (s *Store) DeleteExpiredIdempotencyBatch(ctx context.Context, before time.Time) (int64, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT district_id, actor_id, operation, idempotency_key FROM idempotency_records WHERE expires_at <= ? ORDER BY expires_at, idempotency_key", formatTime(before))
-	if err != nil { return 0, fmt.Errorf("list expired idempotency records: %w", err) }
-	defer rows.Close()
-	type key struct{ district, actor, operation, value string }
-	var keys []key
-	for rows.Next() { var k key; if err:=rows.Scan(&k.district,&k.actor,&k.operation,&k.value);err!=nil{return 0,err}; keys=append(keys,k) }
-	if err:=rows.Err();err!=nil{return 0,err}
 	var deleted int64
-	for _, k := range keys {
-		if err:=s.WithinTx(ctx,func(tx *sql.Tx)error{res,err:=tx.ExecContext(ctx,"DELETE FROM idempotency_records WHERE district_id=? AND actor_id=? AND operation=? AND idempotency_key=?",k.district,k.actor,k.operation,k.value);if err!=nil{return err};n,e:=res.RowsAffected();deleted+=n;return e});err!=nil{return deleted,fmt.Errorf("delete expired idempotency %s: %w",k.value,err)}
+	err := s.WithinTx(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, "SELECT district_id, actor_id, operation, idempotency_key FROM idempotency_records WHERE expires_at <= ? ORDER BY expires_at, idempotency_key", formatTime(before))
+		if err != nil {
+			return fmt.Errorf("list expired idempotency records: %w", err)
+		}
+		type key struct{ district, actor, operation, value string }
+		var keys []key
+		for rows.Next() {
+			var k key
+			if err := rows.Scan(&k.district, &k.actor, &k.operation, &k.value); err != nil {
+				rows.Close()
+				return err
+			}
+			keys = append(keys, k)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		rows.Close()
+		for _, k := range keys {
+			res, err := tx.ExecContext(ctx, "DELETE FROM idempotency_records WHERE district_id=? AND actor_id=? AND operation=? AND idempotency_key=?", k.district, k.actor, k.operation, k.value)
+			if err != nil {
+				return fmt.Errorf("delete expired idempotency %s: %w", k.value, err)
+			}
+			n, err := res.RowsAffected()
+			if err != nil {
+				return err
+			}
+			deleted += n
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
 	}
-	return deleted,nil
+	return deleted, nil
 }
