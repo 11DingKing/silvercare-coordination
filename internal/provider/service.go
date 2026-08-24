@@ -20,7 +20,6 @@ type Repository interface {
 	CreateProvider(context.Context, store.DBTX, domain.Provider) error
 	ProviderByID(context.Context, store.DBTX, string, string) (domain.Provider, error)
 	UpdateProvider(context.Context, store.DBTX, domain.Provider, int64) error
-	PersistProviderAccreditation(context.Context, domain.Provider, int64) error
 }
 
 type Service struct {
@@ -61,42 +60,11 @@ func (s *Service) Register(ctx context.Context, actor domain.Actor, name string,
 }
 
 func (s *Service) Activate(ctx context.Context, actor domain.Actor, id string, expectedVersion int64) (domain.Provider, error) {
-	return s.changeAccreditation(ctx, actor, id, expectedVersion, "activate", func(p domain.Provider) (domain.Provider, error) { return p.Activate(s.now.Now()) })
+	return s.change(ctx, actor, id, expectedVersion, "activate", func(p domain.Provider) (domain.Provider, error) { return p.Activate(s.now.Now()) })
 }
 
 func (s *Service) Suspend(ctx context.Context, actor domain.Actor, id string, expectedVersion int64) (domain.Provider, error) {
 	return s.change(ctx, actor, id, expectedVersion, "suspend", func(p domain.Provider) (domain.Provider, error) { return p.Suspend(s.now.Now()) })
-}
-
-func (s *Service) changeAccreditation(ctx context.Context, actor domain.Actor, id string, expectedVersion int64, action string, mutate func(domain.Provider) (domain.Provider, error)) (domain.Provider, error) {
-	if actor.Role != domain.RoleCoordinator && actor.Role != domain.RoleAuditor {
-		return domain.Provider{}, apperr.New(apperr.CodeForbidden, "this role cannot change provider accreditation")
-	}
-	now := s.now.Now()
-	current, err := s.repo.ProviderByID(ctx, nil, id, actor.DistrictID)
-	if err != nil {
-		return domain.Provider{}, apperr.Wrap(apperr.CodeConflict, action+" provider", err.Error(), err)
-	}
-	if current.Version != expectedVersion {
-		return domain.Provider{}, apperr.Wrap(apperr.CodeConflict, action+" provider", "provider version conflict", fmt.Errorf("provider version conflict"))
-	}
-	updated, err := mutate(current)
-	if err != nil {
-		return domain.Provider{}, apperr.Wrap(apperr.CodeConflict, action+" provider", err.Error(), err)
-	}
-	if err := s.repo.PersistProviderAccreditation(ctx, updated, current.Version); err != nil {
-		return domain.Provider{}, apperr.Wrap(apperr.CodeConflict, "persist provider accreditation", err.Error(), err)
-	}
-	err = s.repo.WithinTx(ctx, func(tx *sql.Tx) error {
-		if err := s.audit.Record(ctx, tx, actor, "provider", id, action, "success", map[string]any{"status": updated.AccreditationStatus}, now); err != nil {
-			return err
-		}
-		return s.events.Enqueue(ctx, tx, actor.DistrictID, "provider.accreditation_changed", "provider", id, map[string]any{"status": updated.AccreditationStatus}, now)
-	})
-	if err != nil {
-		return domain.Provider{}, apperr.Wrap(apperr.CodeConflict, action+" provider", err.Error(), err)
-	}
-	return updated, nil
 }
 
 func (s *Service) change(ctx context.Context, actor domain.Actor, id string, expectedVersion int64, action string, mutate func(domain.Provider) (domain.Provider, error)) (domain.Provider, error) {
