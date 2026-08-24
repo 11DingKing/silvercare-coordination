@@ -49,10 +49,6 @@ func (s *Store) UpdateClaim(ctx context.Context, q store.DBTX, claim domain.Clai
 	return requireOne(result, "claim version conflict")
 }
 
-func (s *Store) PersistClaimSubmission(ctx context.Context, claim domain.Claim) error {
-	return s.WithinTx(ctx, func(tx *sql.Tx) error { return s.CreateClaim(ctx, tx, claim) })
-}
-
 func (s *Store) ClaimForVisit(ctx context.Context, q store.DBTX, visitID string) (domain.Claim, error) {
 	if q == nil {
 		q = s.db

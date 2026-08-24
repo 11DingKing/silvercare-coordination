@@ -29,7 +29,6 @@ type Repository interface {
 	SettleBudget(context.Context, store.DBTX, string, int64, time.Time) error
 	VisitByID(context.Context, store.DBTX, string, string) (domain.Visit, error)
 	CreateClaim(context.Context, store.DBTX, domain.Claim) error
-	PersistClaimSubmission(context.Context, domain.Claim) error
 	ClaimByID(context.Context, store.DBTX, string, string) (domain.Claim, error)
 	UpdateClaim(context.Context, store.DBTX, domain.Claim, int64) error
 }
@@ -131,33 +130,33 @@ func (s *Service) CreateClaim(ctx context.Context, actor domain.Actor, visitID s
 	}
 	now := s.now.Now()
 	var claim domain.Claim
-	visit, err := s.repo.VisitByID(ctx, nil, visitID, actor.DistrictID)
-	if err != nil {
-		return domain.Claim{}, mapBenefitError("load visit for claim", err)
-	}
-	a, err := s.repo.AuthorizationByID(ctx, nil, visit.AuthorizationID, actor.DistrictID)
-	if err != nil {
-		return domain.Claim{}, mapBenefitError("load authorization for claim", err)
-	}
-	claim, err = domain.NewClaim(id, actor.DistrictID, visit, a, now)
-	if err != nil {
-		return domain.Claim{}, mapBenefitError("create claim", err)
-	}
-	claim, err = claim.Submit(now)
-	if err != nil {
-		return domain.Claim{}, mapBenefitError("submit claim", err)
-	}
-	if err := s.repo.PersistClaimSubmission(ctx, claim); err != nil {
-		return domain.Claim{}, mapBenefitError("persist claim", err)
-	}
 	err = s.repo.WithinTx(ctx, func(tx *sql.Tx) error {
+		visit, err := s.repo.VisitByID(ctx, tx, visitID, actor.DistrictID)
+		if err != nil {
+			return err
+		}
+		a, err := s.repo.AuthorizationByID(ctx, tx, visit.AuthorizationID, actor.DistrictID)
+		if err != nil {
+			return err
+		}
+		claim, err = domain.NewClaim(id, actor.DistrictID, visit, a, now)
+		if err != nil {
+			return err
+		}
+		claim, err = claim.Submit(now)
+		if err != nil {
+			return err
+		}
+		if err := s.repo.CreateClaim(ctx, tx, claim); err != nil {
+			return err
+		}
 		if err := s.audit.Record(ctx, tx, actor, "claim", id, "submit", "success", map[string]any{"visit_id": visitID}, now); err != nil {
 			return err
 		}
 		return s.events.Enqueue(ctx, tx, actor.DistrictID, "claim.submitted", "claim", id, map[string]any{"amount_cents": claim.AmountCents}, now)
 	})
 	if err != nil {
-		return domain.Claim{}, mapBenefitError("create claim", err)
+		return domain.Claim{}, mapBenefitError("submit claim", err)
 	}
 	return claim, nil
 }
