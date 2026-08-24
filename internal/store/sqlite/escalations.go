@@ -56,17 +56,18 @@ func (s *Store) UpdateEscalation(ctx context.Context, q store.DBTX, escalation d
 	return requireOne(result, "escalation version conflict")
 }
 
-func (s *Store) PersistEscalationExpiry(ctx context.Context, escalation domain.Escalation, expectedVersion int64) error {
-	return s.WithinTx(ctx, func(tx *sql.Tx) error {
-		current, err := s.EscalationByID(ctx, tx, escalation.ID, escalation.DistrictID)
-		if err != nil {
-			return err
-		}
-		if current.Version != expectedVersion || current.Status != domain.EscalationOpen {
-			return fmt.Errorf("escalation version conflict")
-		}
-		return s.UpdateEscalation(ctx, tx, escalation, expectedVersion)
-	})
+func (s *Store) PersistEscalationExpiry(ctx context.Context, q store.DBTX, escalation domain.Escalation, expectedVersion int64) error {
+	if q == nil {
+		q = s.db
+	}
+	current, err := s.EscalationByID(ctx, q, escalation.ID, escalation.DistrictID)
+	if err != nil {
+		return err
+	}
+	if current.Version != expectedVersion || current.Status != domain.EscalationOpen {
+		return fmt.Errorf("escalation version conflict")
+	}
+	return s.UpdateEscalation(ctx, q, escalation, expectedVersion)
 }
 
 func (s *Store) OverdueOpenEscalations(ctx context.Context, q store.DBTX, now time.Time, limit int) ([]domain.Escalation, error) {
